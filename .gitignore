@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+build/
+
+# Credentials & secrets
+.env
+.env.*
+!.env.example
+session.json
+passwords.txt
+*.key
+*.pem
+
+# Debug artifacts
+test-detail.html
+debug_*.mjs
+get_cookies.cjs
