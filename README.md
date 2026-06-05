@@ -131,7 +131,3 @@ npm start
 - Node.js
 - `@modelcontextprotocol/sdk`
 - Axios
-
-## Лицензия
-
-[MIT](LICENSE.md)
