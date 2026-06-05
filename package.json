@@ -1,5 +1,5 @@
 {
-  "name": "university-mcp",
+  "name": "tsu-mcp",
   "version": "2.0.0",
   "description": "MCP server for TSU university services (LMS, Intime, LK Student)",
   "main": "build/index.js",

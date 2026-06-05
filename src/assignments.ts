@@ -232,6 +232,64 @@ export class Assignments {
     return (result.submissions || []).map(s => s.submission);
   }
 
+  async getByCourseWithStatus(courseId: number): Promise<Array<{
+    id: number; name: string; status: string;
+    grade: number | null; duedate: string; submissionDate: string | null;
+  }>> {
+    const assignments = await this.listByCourse(courseId);
+    const session = this.auth.getSession();
+    const userId = session?.userid || 0;
+    const results: Array<{
+      id: number; name: string; status: string;
+      grade: number | null; duedate: string; submissionDate: string | null;
+    }> = [];
+
+    for (const assignment of assignments) {
+      try {
+        const submissions = await this.getSubmissions(assignment.id);
+        const userSub = userId
+          ? submissions.find(s => s.userid === userId)
+          : submissions[0];
+
+        let status = 'not_submitted';
+        let grade: number | null = null;
+        let submissionDate: string | null = null;
+
+        if (userSub) {
+          status = userSub.status || 'unknown';
+          grade = (userSub as any).grade ?? null;
+          submissionDate = userSub.timemodified
+            ? new Date(userSub.timemodified * 1000).toISOString()
+            : null;
+        }
+
+        if (grade !== null && grade >= 0) {
+          status = 'graded';
+        }
+
+        results.push({
+          id: assignment.id,
+          name: assignment.name,
+          status,
+          grade,
+          duedate: assignment.duedateStr,
+          submissionDate,
+        });
+      } catch {
+        results.push({
+          id: assignment.id,
+          name: assignment.name,
+          status: 'error',
+          grade: null,
+          duedate: assignment.duedateStr,
+          submissionDate: null,
+        });
+      }
+    }
+
+    return results;
+  }
+
   async uploadFile(
     assignmentId: number,
     filePath: string,

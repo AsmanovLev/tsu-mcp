@@ -33,7 +33,7 @@ const intime = new IntimeAPI();
 const lkstudent = new LkStudentAPI(auth);
 
 const server = new Server(
-  { name: 'university-mcp', version: '2.0.0' },
+  { name: 'tsu-mcp', version: '2.0.0' },
   { capabilities: { tools: {} } },
 );
 
@@ -135,6 +135,17 @@ const TOOLS: Tool[] = [
         assignmentId: { type: 'number', description: 'Assignment ID' },
       },
       required: ['assignmentId'],
+    },
+  },
+  {
+    name: 'get_assignment_status',
+    description: 'Check submission status for all assignments in a course',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        courseId: { type: 'number', description: 'Course ID' },
+      },
+      required: ['courseId'],
     },
   },
   {
@@ -413,6 +424,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await assignments.submit(assignmentId);
         return { content: [{ type: 'text', text: `Assignment ${assignmentId} submitted successfully` }] };
       }
+      case 'get_assignment_status': {
+        const { courseId } = args as { courseId: number };
+        const result = await assignments.getByCourseWithStatus(courseId);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
 
       // --- Quizzes ---
       case 'list_quizzes': {
@@ -584,7 +600,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('university-mcp server running on stdio');
+  console.error('tsu-mcp server running on stdio');
 }
 
 main().catch((err) => {
