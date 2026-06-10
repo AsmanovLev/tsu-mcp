@@ -225,9 +225,11 @@ export class Assignments {
   }
 
   async getSubmissions(assignmentId: number): Promise<AssignmentSubmission[]> {
-    const result = await this.api.callSingle('mod_assign_get_submissions', {
-      assignmentid: assignmentId,
-    }) as { submissions: Array<{ submission: AssignmentSubmission }> };
+    const raw = await this.api.callSingle('mod_assign_get_submissions', {
+      assignmentids: [assignmentId],
+    });
+    console.error(`[tsu-mcp] getSubmissions raw response for assignment ${assignmentId}:`, JSON.stringify(raw).slice(0, 500));
+    const result = raw as { submissions: Array<{ submission: AssignmentSubmission }> };
 
     return (result.submissions || []).map(s => s.submission);
   }
@@ -275,7 +277,8 @@ export class Assignments {
           duedate: assignment.duedateStr,
           submissionDate,
         });
-      } catch {
+      } catch (e: any) {
+        console.error(`[tsu-mcp] getSubmissions error for assignment ${assignment.id} (${assignment.name}):`, e?.message || e);
         results.push({
           id: assignment.id,
           name: assignment.name,
