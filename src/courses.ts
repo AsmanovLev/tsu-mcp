@@ -90,22 +90,17 @@ export class Courses {
 
   private extractModName(anchorHtml: string): string {
     const instStart = anchorHtml.indexOf('instancename');
-    if (instStart === -1) return anchorHtml.replace(/<[^>]+>/g, '').trim();
+    if (instStart === -1) {
+      return cleanText(anchorHtml);
+    }
 
     const contentStart = anchorHtml.indexOf('>', instStart) + 1;
-    let contentEnd = anchorHtml.indexOf('</span>', contentStart);
-    if (contentEnd === -1) return anchorHtml.replace(/<[^>]+>/g, '').trim();
-
-    let content = anchorHtml.substring(contentStart, contentEnd + 7);
-
-    let prev: string;
-    do {
-      prev = content;
-      content = content.replace(/<span\b[^>]*\baccesshide\b[^>]*>[\s\S]*?<\/span>/gi, '');
-    } while (content !== prev);
-
-    content = content.replace(/<[^>]+>/g, '');
-    return content.replace(/\s+/g, ' ').trim();
+    let content = anchorHtml.substring(contentStart);
+    const endSpan = content.lastIndexOf('</span>');
+    if (endSpan !== -1) {
+      content = content.substring(0, endSpan);
+    }
+    return cleanText(content);
   }
 
   async scrapeContents(courseId: number): Promise<CourseContent[]> {
@@ -117,10 +112,11 @@ export class Courses {
     let secMatch: RegExpExecArray | null;
     while ((secMatch = sectionRe.exec(html)) !== null) {
       const num = parseInt(secMatch[1], 10);
-      const nameRe = /sectionname[^>]*>([\s\S]*?)<\/div>/i;
-      const afterOpen = html.substring(secMatch.index, secMatch.index + 2000);
+      const nameRe = /sectionname[^>]*>([\s\S]*?)<\/(?:h\d|div|span)>/i;
+      const afterOpen = html.substring(secMatch.index, secMatch.index + 6000);
       const nm = afterOpen.match(nameRe);
-      const name = nm ? nm[1].replace(/<[^>]+>/g, '').trim() : '';
+      let name = nm ? nm[1].replace(/<[^>]+>/g, '').trim() : '';
+      name = decodeHtml(name);
       sectionPositions.push({ num, start: secMatch.index, name });
     }
 
@@ -149,19 +145,19 @@ export class Courses {
       let linkModId = 0;
       let modName = '';
 
-      const nameLinkRe = /<a[^>]*href="([^"]*\/mod\/[^"]*)"[^>]*>\s*<span class="instancename">/gi;
+      const nameLinkRe = /<a[^>]+href="([^"]*\/mod\/[^"]*)"[^>]*>\s*<span class="instancename">/gi;
       const nlr = nameLinkRe.exec(actHtml);
       if (nlr) {
-        href = nlr[1];
+        href = nlr[1].replace(/&amp;/g, '&');
         linkModId = this.extractModId(href);
         const closeIdx = actHtml.indexOf('</a>', nlr.index);
         if (closeIdx !== -1) {
           modName = this.extractModName(actHtml.substring(nlr.index, closeIdx + 4));
         }
       } else {
-        const fallbackLink = actHtml.match(/<a[^>]*href="([^"]*\/mod\/[^"]*)"[^>]*>/i);
+        const fallbackLink = actHtml.match(/<a[^>]+href="([^"]*\/mod\/[^"]*)"[^>]*>/i);
         if (fallbackLink) {
-          href = fallbackLink[1];
+          href = fallbackLink[1].replace(/&amp;/g, '&');
           linkModId = this.extractModId(href);
         }
       }
@@ -172,7 +168,9 @@ export class Courses {
         const secNum = sectionIdx?.num ?? 0;
         if (!modulesBySection.has(secNum)) modulesBySection.set(secNum, []);
         modulesBySection.get(secNum)!.push({
-          id: finalId, name: modName, modname,
+          id: finalId,
+          name: modName,
+          modname,
           url: href.startsWith('http') ? href : `${LMS_URL}${href}`,
           visible: 1,
         });
@@ -207,4 +205,23 @@ export class Courses {
     const allCourses = await this.getAll();
     return allCourses.filter(c => courseIds.includes(c.id));
   }
+}
+
+function decodeHtml(str: string): string {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;|&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+function cleanText(raw: string): string {
+  let cleaned = raw.replace(/<span\b[^>]*\baccesshide\b[^>]*>[\s\S]*?<\/span>/gi, '');
+  cleaned = cleaned.replace(/<[^>]+>/g, '');
+  cleaned = decodeHtml(cleaned);
+  cleaned = cleaned.replace(/\s+(?:Файл|Папка|Гиперссылка|Задание|Тест|Викторина|Форум)\s*$/i, '');
+  return cleaned.replace(/\s+/g, ' ').trim();
 }

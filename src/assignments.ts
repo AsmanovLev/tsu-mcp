@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Auth } from './auth';
 import { MoodleAPI } from './api';
-import * as FormData from 'form-data';
+import FormData from 'form-data';
 
 const LMS_URL = 'https://lms.tsu.ru';
 const ASSIGN_VIEW = '/mod/assign/view.php';
@@ -120,11 +120,9 @@ export class Assignments {
     try {
       const resp = await this.auth.getClient().get(`${LMS_URL}/mod/assign/view.php?id=${cmid}`);
       const html = typeof resp.data === 'string' ? resp.data : '';
-      console.error(`[scrapeDetail] cmid=${cmid} htmlLen=${html.length}`);
       const result: Partial<Assignment> = {};
 
       const datesection = html.match(/data-region="activity-dates"[\s\S]*?<\/div>\s*<\/div>/i);
-      console.error(`[scrapeDetail] datesection=${!!datesection}`);
       if (datesection) {
         const openMatch = datesection[0].match(/Открыто с:<\/strong>\s*([^<]+)/i)
           || datesection[0].match(/Opens:<\/strong>\s*([^<]+)/i);
@@ -158,16 +156,13 @@ export class Assignments {
       if (result.duedate) result.duedateStr = formatTimestamp(result.duedate);
       if (result.allowsubmissionsfromdate) result.opensStr = formatTimestamp(result.allowsubmissionsfromdate);
 
-      console.error(`[scrapeDetail] result:`, JSON.stringify(result));
       return result;
-    } catch (e) {
-      console.error(`[scrapeDetail] ERROR for cmid=${cmid}:`, e);
+    } catch {
       return {};
     }
   }
 
   async getById(assignmentId: number): Promise<Assignment | null> {
-    // Try API first with valid course IDs
     try {
       const coursesResp = await this.api.callSingle('core_course_get_recent_courses', {
         userid: 0, limit: 100, offset: 0,
@@ -191,7 +186,6 @@ export class Assignments {
       // API failed, fall back to scraping
     }
 
-    // Fallback: scrape all courses for this assignment
     return this.scrapeGetById(assignmentId);
   }
 
@@ -209,7 +203,7 @@ export class Assignments {
       let match: RegExpExecArray | null;
       while ((match = re.exec(html)) !== null) {
         const cmid = parseInt(match[1], 10);
-        if (cmid === assignmentId || cmid === assignmentId) {
+        if (cmid === assignmentId) {
           const name = match[3].replace(/<[^>]+>/g, '').replace(/\s+Задание\s*$/, '').trim();
           const base: Assignment = {
             id: cmid, cmid, course: course.id, name,
@@ -228,9 +222,7 @@ export class Assignments {
     const raw = await this.api.callSingle('mod_assign_get_submissions', {
       assignmentids: [assignmentId],
     });
-    console.error(`[tsu-mcp] getSubmissions raw response for assignment ${assignmentId}:`, JSON.stringify(raw).slice(0, 500));
     const result = raw as { submissions: Array<{ submission: AssignmentSubmission }> };
-
     return (result.submissions || []).map(s => s.submission);
   }
 
@@ -277,8 +269,7 @@ export class Assignments {
           duedate: assignment.duedateStr,
           submissionDate,
         });
-      } catch (e: any) {
-        console.error(`[tsu-mcp] getSubmissions error for assignment ${assignment.id} (${assignment.name}):`, e?.message || e);
+      } catch {
         results.push({
           id: assignment.id,
           name: assignment.name,
@@ -300,6 +291,11 @@ export class Assignments {
     const session = this.auth.getSession();
     if (!session) throw new Error('Not authenticated');
 
+    const resolvedPath = path.resolve(filePath);
+    if (!fs.existsSync(resolvedPath)) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+
     const editUrl = `${LMS_URL}${ASSIGN_VIEW}?id=${assignmentId}&action=editsubmission`;
 
     const editResp = await this.auth.getClient().get(editUrl);
@@ -309,12 +305,12 @@ export class Assignments {
     if (!itemidMatch) throw new Error('Could not extract itemid from editsubmission page');
 
     const itemid = parseInt(itemidMatch[1], 10);
-    const filename = path.basename(filePath);
+    const filename = path.basename(resolvedPath);
 
     const uploadUrl = `${LMS_URL}/repository/draftfiles_ajax.php?action=upload`;
 
-    const form = new FormData.default();
-    form.append('repo_upload_file', fs.createReadStream(filePath), filename);
+    const form = new FormData();
+    form.append('repo_upload_file', fs.createReadStream(resolvedPath), filename);
     form.append('title', filename);
     form.append('sesskey', session.sesskey);
     form.append('itemid', String(itemid));

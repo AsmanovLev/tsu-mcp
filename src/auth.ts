@@ -24,6 +24,7 @@ export class Auth {
       withCredentials: true,
       maxRedirects: 3,
       validateStatus: (status) => status < 400 || status === 302,
+      proxy: false,
     });
 
     this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
@@ -203,7 +204,7 @@ export class Auth {
       throw new Error(`LMS auth: проверка сессии не удалась (${err instanceof Error ? err.message : String(err)})`);
     }
 
-    const first = Array.isArray(body) ? (body[0] as Record<string, unknown>) : null;
+    const first = Array.isArray(body) ? (body[0] as Record<string, unknown>) : (body as Record<string, unknown> | null);
     const errcode = ((first?.errorcode as string | undefined)
       ?? ((first?.exception as Record<string, unknown> | undefined)?.errorcode as string | undefined)
       ?? '').toLowerCase();

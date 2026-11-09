@@ -36,6 +36,7 @@ export class LkStudentAPI {
       withCredentials: true,
       maxRedirects: 0,
       validateStatus: (status) => status < 400 || status === 302,
+      proxy: false,
     });
 
     this.client.interceptors.request.use((config: InternalAxiosRequestConfig) => {

@@ -1,5 +1,7 @@
 import dotenv from 'dotenv';
 import path from 'path';
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 dotenv.config({ path: path.resolve(__dirname, '.env') });
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -42,7 +44,7 @@ const lkstudent = new LkStudentAPI(auth);
  */
 function withLocalTimes(schedule: any): any {
   if (!schedule || !Array.isArray(schedule.grid)) return schedule;
-  const SPLIT_LABELS = new Set(['а', 'б', 'a', 'b']);
+  const SPLIT_LABELS = new Set(['а', 'б', 'a', 'b', '1', '2']);
   const fmt = (sec: unknown): string => {
     if (typeof sec !== 'number') return '';
     const d = new Date(Date.UTC(1970, 0, 1, 0, 0, sec));

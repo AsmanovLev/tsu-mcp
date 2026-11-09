@@ -69,6 +69,7 @@ export class IntimeAPI {
     this.client = axios.create({
       baseURL: INTIME_URL,
       timeout: 15000,
+      proxy: false,
     });
   }
 
