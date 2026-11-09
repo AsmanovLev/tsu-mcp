@@ -32,6 +32,97 @@ const files = new Files(auth);
 const intime = new IntimeAPI();
 const lkstudent = new LkStudentAPI(auth);
 
+/**
+ * Intime отдаёт starts/ends как секунды от полуночи в UTC. Без пересчёта клиент видит
+ * 01:45 вместо 08:45 по Томску. Добавляем локальные строки, исходные поля не трогаем.
+ *
+ * Подгруппы: у всех подгрупп один и тот же groupId, различие только в имени.
+ * Реально делят поток только метки «а»/«б»; «1»…«7» (НИР) и «Ф» (физкультура)
+ * на практике общие, поэтому считаются занятиями всей группы.
+ */
+function withLocalTimes(schedule: any): any {
+  if (!schedule || !Array.isArray(schedule.grid)) return schedule;
+  const SPLIT_LABELS = new Set(['а', 'б', 'a', 'b']);
+  const fmt = (sec: unknown): string => {
+    if (typeof sec !== 'number') return '';
+    const d = new Date(Date.UTC(1970, 0, 1, 0, 0, sec));
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  const label = (groups: any): { subgroup: string; parallel: string } => {
+    const name = Array.isArray(groups) && groups.length ? String(groups[0]?.name || '') : '';
+    const m = name.match(/\(([^)]+)\)\s*$/);
+    const raw = m ? m[1].trim().toLowerCase() : '';
+    const normalized = raw === 'a' ? 'а' : raw === 'b' ? 'б' : raw;
+    return {
+      subgroup: SPLIT_LABELS.has(raw) ? normalized : '',
+      parallel: normalized, // исходная метка: «1»…«7», «Ф», «а», «б» — только для справки
+    };
+  };
+  return {
+    ...schedule,
+    grid: schedule.grid.map((day: any) => ({
+      ...day,
+      lessons: (day.lessons || []).map((l: any) => {
+        const lab = label(l.groups);
+        return {
+          ...l,
+          startsStr: fmt(l.starts),
+          endsStr: fmt(l.ends),
+          subgroup: lab.subgroup,
+          parallel: lab.parallel,
+        };
+      }),
+    })),
+  };
+}
+
+/** Оставляет занятия своей подгруппы плюс общие для всей группы (без метки). */
+function filterBySubgroup(schedule: any, subgroup: string): any {
+  if (!schedule || !Array.isArray(schedule.grid)) return schedule;
+  const want = subgroup.trim().toLowerCase();
+  return {
+    ...schedule,
+    grid: schedule.grid.map((day: any) => ({
+      ...day,
+      lessons: (day.lessons || []).filter((l: any) => {
+        const sg = String(l.subgroup || '').trim().toLowerCase();
+        return !sg || sg === want;
+      }),
+    })),
+  };
+}
+
+/**
+ * Схлопывает параллельные потоки одного предмета (НИР: 7 преподавателей в одно время)
+ * в одну запись с массивом `options`, иначе расписание пестрит дублями.
+ * Ключ — пара + название + время старта.
+ */
+function collapseParallel(schedule: any): any {
+  if (!schedule || !Array.isArray(schedule.grid)) return schedule;
+  const option = (l: any) => ({
+    parallel: l.parallel || '',
+    professor: (l.professor || {}).fullName || '',
+    audience: (l.audience || {}).name || '',
+  });
+  return {
+    ...schedule,
+    grid: schedule.grid.map((day: any) => {
+      const out: any[] = [];
+      const byKey = new Map<string, any>();
+      for (const l of day.lessons || []) {
+        if (l.type !== 'LESSON') { out.push(l); continue; }
+        const key = `${l.lessonNumber}|${l.title}|${l.starts}`;
+        const seen = byKey.get(key);
+        if (seen) { seen.options.push(option(l)); continue; }
+        const entry = { ...l, options: [option(l)] };
+        byKey.set(key, entry);
+        out.push(entry);
+      }
+      return { ...day, lessons: out };
+    }),
+  };
+}
+
 const server = new Server(
   { name: 'tsu-mcp', version: '2.0.0' },
   { capabilities: { tools: {} } },
@@ -291,6 +382,7 @@ const TOOLS: Tool[] = [
         groupId: { type: 'string', description: 'Group ID' },
         dateFrom: { type: 'string', description: 'Start date (YYYY-MM-DD, optional)' },
         dateTo: { type: 'string', description: 'End date (YYYY-MM-DD, optional)' },
+        subgroup: { type: 'string', description: 'Filter by subgroup: "а" or "б". Optional; empty keeps all lessons with their subgroup field' },
       },
       required: ['groupId'],
     },
@@ -374,7 +466,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // --- Courses ---
       case 'get_courses': {
         const result = await courses.getAll();
-        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+        // Moodle кладёт в summary полный HTML описания курса: 16 курсов дают ~225 КБ,
+        // что переполняет контекст клиента. Отдаём плоский текст с ограничением длины.
+        const slim = Array.isArray(result)
+          ? result.map((c: any) => {
+              const { courseimage, ...rest } = c ?? {};
+              return {
+                ...rest,
+                summary: typeof rest?.summary === 'string'
+                  ? rest.summary.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 240)
+                  : rest?.summary,
+              };
+            })
+          : result;
+        return { content: [{ type: 'text', text: JSON.stringify(slim, null, 2) }] };
       }
       case 'get_course': {
         const { courseId } = args as { courseId: number };
@@ -480,7 +585,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // --- Notifications ---
       case 'get_notifications': {
-        const result = await api.callSingle('message_popup_get_popup_notifications', {});
+        // Moodle требует useridto + пагинацию; без них отвечает invalidparameter.
+        const session = auth.getSession();
+        if (!session) throw new Error('Not authenticated');
+        const { limitnum } = args as { limitnum?: number };
+        const result = await api.callSingle('message_popup_get_popup_notifications', {
+          useridto: session.userid,
+          limitfrom: 0,
+          limitnum: limitnum && limitnum > 0 ? limitnum : 20,
+        });
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
@@ -539,9 +652,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: 'text', text: JSON.stringify(groups, null, 2) }] };
       }
       case 'intime_get_schedule': {
-        const { groupId, dateFrom, dateTo } = args as { groupId: string; dateFrom?: string; dateTo?: string };
+        const { groupId, dateFrom, dateTo, subgroup } = args as {
+          groupId: string; dateFrom?: string; dateTo?: string; subgroup?: string;
+        };
         const schedule = await intime.getGroupSchedule(groupId, dateFrom, dateTo);
-        return { content: [{ type: 'text', text: JSON.stringify(schedule, null, 2) }] };
+        const enriched = withLocalTimes(schedule);
+        const filtered = subgroup ? filterBySubgroup(enriched, subgroup) : enriched;
+        const finalSchedule = collapseParallel(filtered);
+        return { content: [{ type: 'text', text: JSON.stringify(finalSchedule, null, 2) }] };
       }
 
       case 'intime_get_professors': {
@@ -556,12 +674,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'intime_get_professor_schedule': {
         const { professorId, dateFrom, dateTo } = args as { professorId: string; dateFrom?: string; dateTo?: string };
         const ps = await intime.getProfessorSchedule(professorId, dateFrom, dateTo);
-        return { content: [{ type: 'text', text: JSON.stringify(ps, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(withLocalTimes(ps), null, 2) }] };
       }
       case 'intime_get_audience_schedule': {
         const { audienceId, dateFrom, dateTo } = args as { audienceId: string; dateFrom?: string; dateTo?: string };
         const as = await intime.getAudienceSchedule(audienceId, dateFrom, dateTo);
-        return { content: [{ type: 'text', text: JSON.stringify(as, null, 2) }] };
+        return { content: [{ type: 'text', text: JSON.stringify(withLocalTimes(as), null, 2) }] };
       }
 
       // --- LK Student ---
@@ -601,6 +719,12 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error('tsu-mcp server running on stdio');
+
+  // Логин в ЛК студента идёт цепочкой редиректов и занимает десятки секунд.
+  // Прогреваем его в фоне, иначе первый lk_* вызов пользователя упирается в таймаут.
+  void lkstudent.ensureAuth().catch((err: unknown) => {
+    console.error('LK warmup failed:', err instanceof Error ? err.message : String(err));
+  });
 }
 
 main().catch((err) => {
