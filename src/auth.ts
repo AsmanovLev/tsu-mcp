@@ -1,9 +1,14 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SessionData, loadSession, saveSession, isSessionExpired } from './session';
 
 const LMS_URL = 'https://lms.tsu.ru';
 const ACCOUNTS_URL = 'https://accounts.tsu.ru';
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000;
+
+/** Коды Moodle, которыми он сообщает «сессии нет / ключ недействителен». */
+const SESSION_INVALID_CODES = new Set(['servicerequireslogin', 'invalidtoken', 'accessexception']);
 
 interface CookieJar {
   [key: string]: string;
@@ -160,8 +165,68 @@ export class Auth {
       this.session = { cookies: { ...this.cookies }, sesskey, userid, expires: new Date(Date.now() + SESSION_DURATION_MS).toISOString() };
     }
 
+    await this.assertSessionValid(this.session);
     saveSession(this.session);
     return this.session;
+  }
+
+  /**
+   * Moodle отдаёт sesskey и на гостевой странице, поэтому его наличие ничего не доказывает:
+   * при неверном пароле вход «успешно» завершался, а падало только на первом запросе.
+   *
+   * Две проверки: гостевая сессия не имеет userid, а рабочий AJAX-вызов на невалидной сессии
+   * отвечает servicerequireslogin / invalidtoken. Прочие ошибки (например servicenotavailable
+   * у отдельных функций ТГУ) авторизацию не опровергают и игнорируются.
+   */
+  private async assertSessionValid(session: SessionData): Promise<void> {
+    if (!session.userid) {
+      this.resetSession();
+      throw new Error('LMS auth: вход не выполнен (нет userid) — проверьте TSU_EMAIL и TSU_PASSWORD');
+    }
+
+    const url = `${LMS_URL}/lib/ajax/service.php?sesskey=${encodeURIComponent(session.sesskey)}`
+      + '&info=core_course_get_enrolled_courses_by_timeline_v2';
+    let body: unknown;
+    try {
+      const resp = await this.client.post(
+        url,
+        [{
+          index: 0,
+          methodname: 'core_course_get_enrolled_courses_by_timeline_v2',
+          args: { classification: 'inprogress', limit: 1, offset: 0 },
+        }],
+        { headers: { 'Content-Type': 'application/json' }, maxRedirects: 0 },
+      );
+      body = resp.data;
+    } catch (err) {
+      this.resetSession();
+      throw new Error(`LMS auth: проверка сессии не удалась (${err instanceof Error ? err.message : String(err)})`);
+    }
+
+    const first = Array.isArray(body) ? (body[0] as Record<string, unknown>) : null;
+    const errcode = ((first?.errorcode as string | undefined)
+      ?? ((first?.exception as Record<string, unknown> | undefined)?.errorcode as string | undefined)
+      ?? '').toLowerCase();
+
+    if (SESSION_INVALID_CODES.has(errcode)) {
+      this.resetSession();
+      throw new Error(
+        'LMS auth: неверный логин или пароль'
+        + (errcode ? ` (${errcode})` : '')
+        + '. Проверьте TSU_EMAIL и TSU_PASSWORD в .env',
+      );
+    }
+  }
+
+  private resetSession(): void {
+    this.session = null;
+    this.cookies = {};
+    try {
+      const file = path.resolve(__dirname, 'session.json');
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch {
+      /* best-effort: не мешаем основному потоку ошибки */
+    }
   }
 
   private extractVerificationToken(html: string): string {

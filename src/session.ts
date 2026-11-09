@@ -24,7 +24,13 @@ export function loadSession(): SessionData | null {
 
 export function saveSession(session: SessionData): void {
   try {
-    fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), 'utf-8');
+    // В файле лежат cookies живой сессии — ограничиваем доступ владельцем.
+    fs.writeFileSync(SESSION_FILE, JSON.stringify(session, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    try {
+      fs.chmodSync(SESSION_FILE, 0o600);
+    } catch {
+      /* существующий файл мог сохранить старые права — chmod лучшее, что можем */
+    }
   } catch {
     console.error('Failed to save session file');
   }

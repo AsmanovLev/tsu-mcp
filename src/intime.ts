@@ -72,6 +72,18 @@ export class IntimeAPI {
     });
   }
 
+  /**
+   * API расписания отвечает 404, если не передать ОБА конца периода.
+   * Схема инструментов объявляет их необязательными, поэтому подставляем
+   * окно «сегодня .. +6 дней», когда даты не заданы.
+   */
+  private resolveRange(dateFrom?: string, dateTo?: string): { dateFrom: string; dateTo: string } {
+    const fmt = (d: Date): string => d.toISOString().slice(0, 10);
+    const from = dateFrom ? new Date(dateFrom) : new Date();
+    const to = dateTo ? new Date(dateTo) : new Date(from.getTime() + 6 * 24 * 60 * 60 * 1000);
+    return { dateFrom: dateFrom || fmt(from), dateTo: dateTo || fmt(to) };
+  }
+
   async getFaculties(): Promise<Faculty[]> {
     const resp = await this.client.get('/api/web/v1/faculties');
     return resp.data;
@@ -83,9 +95,8 @@ export class IntimeAPI {
   }
 
   async getGroupSchedule(groupId: string, dateFrom?: string, dateTo?: string): Promise<ScheduleGrid> {
-    const params: Record<string, string> = { id: groupId };
-    if (dateFrom) params.dateFrom = dateFrom;
-    if (dateTo) params.dateTo = dateTo;
+    const range = this.resolveRange(dateFrom, dateTo);
+    const params: Record<string, string> = { id: groupId, ...range };
     const resp = await this.client.get('/api/web/v1/schedule/group', { params });
     return resp.data;
   }
@@ -106,17 +117,15 @@ export class IntimeAPI {
   }
 
   async getProfessorSchedule(professorId: string, dateFrom?: string, dateTo?: string): Promise<ScheduleGrid> {
-    const params: Record<string, string> = { id: professorId };
-    if (dateFrom) params.dateFrom = dateFrom;
-    if (dateTo) params.dateTo = dateTo;
+    const range = this.resolveRange(dateFrom, dateTo);
+    const params: Record<string, string> = { id: professorId, ...range };
     const resp = await this.client.get('/api/web/v1/schedule/professor', { params });
     return resp.data;
   }
 
   async getAudienceSchedule(audienceId: string, dateFrom?: string, dateTo?: string): Promise<ScheduleGrid> {
-    const params: Record<string, string> = { id: audienceId };
-    if (dateFrom) params.dateFrom = dateFrom;
-    if (dateTo) params.dateTo = dateTo;
+    const range = this.resolveRange(dateFrom, dateTo);
+    const params: Record<string, string> = { id: audienceId, ...range };
     const resp = await this.client.get('/api/web/v1/schedule/audience', { params });
     return resp.data;
   }
